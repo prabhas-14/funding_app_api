@@ -1,0 +1,1 @@
+web: gunicorn funding_bot_api:app
