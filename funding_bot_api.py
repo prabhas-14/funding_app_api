@@ -5,17 +5,19 @@ import time
 import pkg_resources 
 
 # Hyperliquid imports
-from hyperliquid.info import Info as HyperliquidInfo 
-from hyperliquid.utils import constants as hyperliquid_constants 
+from hyperliquid.info import Info as HyperliquidInfo # Renamed to avoid conflict if user used 'Info' elsewhere
+from hyperliquid.utils import constants as hyperliquid_constants # Renamed for clarity
 
 # CoinGecko import
 from pycoingecko import CoinGeckoAPI
 
-# Configure logging
+# Configure logging (can be configured once)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(module)s - %(funcName)s:%(lineno)d - %(message)s')
 
 # Log library versions
 try:
+    # Assuming the package name for Hyperliquid SDK is 'hyperliquid-python-sdk'
+    # If it's different, this might not work or might need adjustment.
     HL_LIB_VERSION = pkg_resources.get_distribution("hyperliquid-python-sdk").version 
     logging.info(f"Using hyperliquid-python-sdk version: {HL_LIB_VERSION}")
 except pkg_resources.DistributionNotFound:
@@ -33,12 +35,15 @@ except Exception as e:
 
 
 # --- Initialize Clients ---
-hl_client_global = None 
-cg_client_global = None 
+# Using more specific names for client instances
+hl_client_global = None # For Hyperliquid
+cg_client_global = None # For CoinGecko
 
 def initialize_hyperliquid_client():
-    global hl_client_global 
+    """Initializes and returns the Hyperliquid Info client."""
+    global hl_client_global # To modify the global instance
     try:
+        # Using the renamed import for clarity
         hl_client_global = HyperliquidInfo(hyperliquid_constants.MAINNET_API_URL, skip_ws=True)
         logging.info("Successfully initialized Hyperliquid Info client for API.")
         return hl_client_global
@@ -48,7 +53,8 @@ def initialize_hyperliquid_client():
         return None
 
 def initialize_coingecko_client():
-    global cg_client_global 
+    """Initializes and returns the CoinGeckoAPI client."""
+    global cg_client_global # To modify the global instance
     try:
         cg_client_global = CoinGeckoAPI()
         status = cg_client_global.ping()
@@ -62,55 +68,98 @@ def initialize_coingecko_client():
         cg_client_global = None
         return None
 
-initialize_hyperliquid_client() 
-initialize_coingecko_client()   
+# Initialize clients at startup
+initialize_hyperliquid_client() # This will set hl_client_global
+initialize_coingecko_client()   # This will set cg_client_global
 
 
-# --- Hyperliquid Data Fetching Functions ---
-def get_hyperliquid_all_market_details(client: HyperliquidInfo):
-    if not client:
+# --- Hyperliquid Data Fetching Functions (from user's provided code) ---
+def get_all_perpetual_markets(info_client: HyperliquidInfo): # Parameter type hint updated
+    """Fetches and returns the names of all available perpetual markets from Hyperliquid."""
+    if not info_client:
+        logging.warning("API (Hyperliquid): get_all_perpetual_markets called with no client.")
+        return []
+    try:
+        logging.debug("API (Hyperliquid): Fetching metadata and asset contexts...")
+        meta, _ = info_client.meta_and_asset_ctxs() 
+        
+        perpetual_markets = []
+        if meta and "universe" in meta and isinstance(meta["universe"], list):
+            for asset_meta_info in meta["universe"]:
+                if isinstance(asset_meta_info, dict):
+                    asset_name = asset_meta_info.get("name") 
+                    if asset_name:
+                        perpetual_markets.append(asset_name)
+            logging.info(f"API (Hyperliquid): Extracted {len(perpetual_markets)} market names from meta['universe'].")
+        else:
+            logging.warning("API (Hyperliquid): Could not identify any perpetual markets from meta['universe'].")
+            return []
+        return list(set(perpetual_markets)) 
+    except Exception as e:
+        logging.error(f"API (Hyperliquid): Error fetching perpetual markets: {e}", exc_info=True)
+        return []
+
+def get_all_market_details(info_client: HyperliquidInfo): # Parameter type hint updated
+    """
+    Retrieves current funding rates, APR, and volume for all Hyperliquid markets.
+    Returns a list of dictionaries, one for each market.
+    """
+    if not info_client:
         logging.warning("API (Hyperliquid): get_all_market_details called with no client.")
         return []
+
     all_market_data_list = []
     try:
-        logging.debug("API (Hyperliquid): Fetching fresh metadata and asset contexts.")
-        meta, asset_contexts_with_state = client.meta_and_asset_ctxs()
+        logging.debug("API (Hyperliquid): Fetching fresh metadata and asset contexts in get_all_market_details.")
+        meta, asset_contexts_with_state = info_client.meta_and_asset_ctxs()
+
         if not (meta and "universe" in meta and isinstance(meta["universe"], list)):
             logging.error("API (Hyperliquid): Meta data or meta['universe'] is not in the expected format.")
             return []
+        
         if not (asset_contexts_with_state and isinstance(asset_contexts_with_state, list)):
             logging.error("API (Hyperliquid): asset_contexts_with_state is not a list as expected.")
             return []
-        current_market_names = [
-            asset_detail.get("name") 
-            for asset_detail in meta["universe"] 
-            if isinstance(asset_detail, dict) and asset_detail.get("name")
-        ]
+
+        current_market_names = []
+        for asset_detail in meta["universe"]:
+            if isinstance(asset_detail, dict) and asset_detail.get("name"):
+                name = asset_detail.get("name")
+                current_market_names.append(name)
+        
         if len(current_market_names) != len(asset_contexts_with_state):
             logging.error(
                 f"API (Hyperliquid): Critical Error: Mismatch in lengths between names from meta ({len(current_market_names)}) "
                 f"and asset context states ({len(asset_contexts_with_state)})."
             )
             return []
+        
         logging.info(f"API (Hyperliquid): Processing {len(current_market_names)} markets for detailed data.")
+
         for i in range(len(current_market_names)):
             market_name = current_market_names[i]
             asset_state_data = asset_contexts_with_state[i]
+
             if not isinstance(asset_state_data, dict):
                 logging.warning(f"API (Hyperliquid): State data for market '{market_name}' (at index {i}) is not a dict. Skipping.")
                 continue
-            
-            hourly_rate_str = asset_state_data.get("funding") 
+
+            hourly_rate_str = asset_state_data.get("funding")
             volume_24h_str = asset_state_data.get("dayNtlVlm") 
             open_interest_str = asset_state_data.get("openInterest")
 
+
             market_data_entry = {
-                "exchange": "Hyperliquid", 
-                "market": market_name + "-PERP",
-                "hourly_percentage": 0.0, "apr": 0.0, "volume_24h": 0.0,
-                "open_interest": 0.0, "next_funding_time": None, 
-                "funding_interval_hours": 1 
+                "exchange": "Hyperliquid", # Added for clarity if combining data later
+                "market": market_name + "-PERP", 
+                "hourly_percentage": 0.0,
+                "apr": 0.0,
+                "volume_24h": 0.0, # Ensure float for consistency
+                "open_interest": 0.0, # Added
+                "next_funding_time": None, # Placeholder for Hyperliquid
+                "funding_interval_hours": 1 # Hyperliquid funds hourly
             }
+
             if hourly_rate_str is not None:
                 try:
                     hourly_rate_decimal = float(hourly_rate_str)
@@ -123,47 +172,53 @@ def get_hyperliquid_all_market_details(client: HyperliquidInfo):
                 try:
                     market_data_entry["volume_24h"] = float(volume_24h_str)
                 except ValueError:
-                     logging.warning(f"API (Hyperliquid): Could not parse 24h volume for {market_name}: value '{volume_24h_str}'")
+                    logging.warning(f"API (Hyperliquid): Could not parse 24h volume for {market_name}: value '{volume_24h_str}'")
             
             if open_interest_str is not None:
                 try:
                     market_data_entry["open_interest"] = float(open_interest_str)
                 except ValueError:
                     logging.warning(f"API (Hyperliquid): Could not parse open interest for {market_name}: value '{open_interest_str}'")
+            
             all_market_data_list.append(market_data_entry)
+        
         return all_market_data_list
     except Exception as e:
         logging.error(f"API (Hyperliquid): Error in get_all_market_details: {e}", exc_info=True)
         return []
 
+
 def get_top_funding_opportunities(all_market_data_list: list, top_n: int = 5):
-    if not all_market_data_list: return []
+    """
+    Derives top N funding opportunities from the list of all market data.
+    """
+    if not all_market_data_list:
+        return []
     positive_funding_markets = [
         market for market in all_market_data_list if market.get("hourly_percentage", 0) > 0
     ]
-    if not positive_funding_markets: return []
+    if not positive_funding_markets:
+        return []
     sorted_markets = sorted(
         positive_funding_markets, key=lambda x: x["hourly_percentage"], reverse=True
     )
     return sorted_markets[:top_n]
 
-# --- CoinGecko Data Fetching Function (MODIFIED) ---
-def get_coingecko_market_overview(client: CoinGeckoAPI, coins_per_page: int = 250):
+# --- CoinGecko Data Fetching Function (NEW) ---
+def get_coingecko_market_overview(client: CoinGeckoAPI, top_n_coins: int = 15):
     if not client:
         logging.warning("API (CoinGecko): get_coingecko_market_overview called with no client.")
         return []
     
     processed_coins = []
     try:
-        logging.info(f"API (CoinGecko): Fetching top {coins_per_page} coins from CoinGecko...")
-        # Fetch market data for top N coins, including 7-day sparkline AND price change percentages
+        logging.info(f"API (CoinGecko): Fetching top {top_n_coins} coins from CoinGecko...")
         coins_market_data = client.get_coins_markets(
             vs_currency='usd',
             order='market_cap_desc',
-            per_page=coins_per_page,
+            per_page=top_n_coins,
             page=1,
-            sparkline=True,
-            price_change_percentage='1h,24h,7d' # Request 1h, 24h, 7d price changes
+            sparkline=True 
         )
 
         if not coins_market_data:
@@ -171,16 +226,13 @@ def get_coingecko_market_overview(client: CoinGeckoAPI, coins_per_page: int = 25
             return []
 
         for rank_idx, coin in enumerate(coins_market_data, 1):
-            def get_safe(data, key, default_val=None):
+            def get_safe(data, key, default_val=None): # Renamed default to default_val
                 return data.get(key, default_val)
 
             market_cap_num = get_safe(coin, 'market_cap', 0.0)
             circulating_supply_num = get_safe(coin, 'circulating_supply', 0.0)
-            fdv_num = get_safe(coin, 'fully_diluted_valuation', 0.0) # FDV is included
-            total_volume_num = get_safe(coin, 'total_volume', 0.0)
-            
-            raw_sparkline = get_safe(coin, 'sparkline_in_7d', {}).get('price', [])
-            sampled_sparkline = raw_sparkline[::7] if raw_sparkline and len(raw_sparkline) > 14 else raw_sparkline
+            fdv_num = get_safe(coin, 'fully_diluted_valuation', 0.0)
+            total_volume_num = get_safe(coin, 'total_volume', 0.0) # 24h trading volume in USD
 
             coin_data = {
                 "rank": rank_idx, 
@@ -189,18 +241,15 @@ def get_coingecko_market_overview(client: CoinGeckoAPI, coins_per_page: int = 25
                 "symbol": get_safe(coin, 'symbol', '').upper(),
                 "image": get_safe(coin, 'image'),
                 "price": get_safe(coin, 'current_price', 0.0),
-                # Correctly access the specific price change percentages
-                "price_change_percentage_1h": get_safe(coin, 'price_change_percentage_1h_in_currency', 0.0),
-                "price_change_percentage_24h": get_safe(coin, 'price_change_percentage_24h_in_currency', 0.0),
-                "price_change_percentage_7d": get_safe(coin, 'price_change_percentage_7d_in_currency', 0.0),
+                "price_change_percentage_24h": get_safe(coin, 'price_change_percentage_24h', 0.0), # CoinGecko uses this key
                 "marketCapNum": market_cap_num,
                 "marketCap": f"${market_cap_num:,.0f}", 
                 "circulatingSupplyNum": circulating_supply_num,
                 "circulatingSupply": f"{circulating_supply_num:,.0f} {get_safe(coin, 'symbol', '').upper()}",
-                "fdvNum": fdv_num if fdv_num else 0.0,
+                "fdvNum": fdv_num if fdv_num else 0.0, # Ensure fdvNum is a float
                 "fdv": f"${fdv_num:,.0f}" if fdv_num else "N/A", 
-                "volume_24h": total_volume_num,
-                "sparkline_in_7d": {"price": sampled_sparkline } 
+                "volume_24h": total_volume_num, # Adding 24h volume for the main page table
+                "sparkline_in_7d": {"price": get_safe(coin, 'sparkline_in_7d', {}).get('price', [])}
             }
             processed_coins.append(coin_data)
         
@@ -216,9 +265,13 @@ def get_coingecko_market_overview(client: CoinGeckoAPI, coins_per_page: int = 25
 app = Flask(__name__)
 CORS(app) 
 
-@app.route('/api/hyperliquid/funding-data', methods=['GET'])
-def get_hyperliquid_funding_data_endpoint(): 
+# Note: Clients are initialized globally at startup now.
+# The endpoint functions will check if they are available.
+
+@app.route('/api/funding-data', methods=['GET']) # This is your existing Hyperliquid endpoint
+def get_hyperliquid_funding_data_endpoint(): # Renamed for clarity
     global hl_client_global 
+
     if not hl_client_global:
         logging.info("Hyperliquid client not initialized, attempting to initialize for this request...")
         initialize_hyperliquid_client() 
@@ -226,13 +279,14 @@ def get_hyperliquid_funding_data_endpoint():
             logging.error("API Endpoint (Hyperliquid): Hyperliquid client is not available after re-attempt.")
             return jsonify({"error": "Failed to connect to Hyperliquid services"}), 500
 
-    logging.info("API Endpoint: /api/hyperliquid/funding-data called")
+    logging.info("API Endpoint: /api/funding-data (Hyperliquid) called")
     all_markets_detailed = get_all_market_details(hl_client_global)
     
     if not all_markets_detailed:
         logging.warning("API Endpoint (Hyperliquid): No market data retrieved.")
         return jsonify({
-            "all_markets": [], "top_funding_opportunities": [],
+            "all_markets": [],
+            "top_funding_opportunities": [],
             "last_updated_timestamp": time.time(),
             "error_message": "Could not retrieve market data from Hyperliquid."
         }), 200
@@ -246,6 +300,7 @@ def get_hyperliquid_funding_data_endpoint():
     logging.info(f"API (Hyperliquid): Sending data for {len(all_markets_detailed)} markets, {len(top_opportunities)} top opportunities.")
     return jsonify(response_data)
 
+# --- New Endpoint for CoinGecko Market Overview ---
 @app.route('/api/market-overview', methods=['GET'])
 def get_market_overview_endpoint():
     global cg_client_global
@@ -257,7 +312,7 @@ def get_market_overview_endpoint():
             return jsonify({"error": "Failed to connect to CoinGecko services"}), 503 
     
     logging.info("API Endpoint: /api/market-overview called")
-    market_overview_data = get_coingecko_market_overview(cg_client_global, coins_per_page=250) 
+    market_overview_data = get_coingecko_market_overview(cg_client_global, top_n_coins=15) 
 
     if not market_overview_data:
         logging.warning("API Endpoint (Market Overview): No market overview data retrieved from CoinGecko.")
@@ -277,6 +332,8 @@ def get_market_overview_endpoint():
 
 if __name__ == '__main__':
     logging.info("Starting Flask API server...")
+    # Clients are initialized globally at the start.
+    # If they failed, the endpoints will attempt a re-initialization.
     if not hl_client_global:
         logging.warning("Hyperliquid client FAILED to initialize at startup. Endpoint will attempt re-init.")
     if not cg_client_global:
